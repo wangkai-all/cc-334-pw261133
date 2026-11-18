@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>浏览器采集器 · 入库队列</title>
+<style>
+  body { font: 14px/1.55 -apple-system, "Segoe UI", system-ui, sans-serif; margin: 0; color: #1f2328; }
+  header { background: #0d3b66; color: #fff; padding: 12px 20px; display:flex; gap:16px; align-items:center; }
+  header a { color:#a3d5ff; text-decoration:none; font-size:13px; }
+  main { padding: 16px 20px; }
+  .card { border:1px solid #d0d7de; border-radius:8px; padding:14px; margin-bottom:16px; background:#fff; }
+  table { border-collapse:collapse; width:100%; font-size:12.5px; }
+  th,td { border:1px solid #d0d7de; padding:6px 8px; text-align:left; vertical-align:top; }
+  th { background:#f6f8fa; }
+  code { font-size:11px; word-break:break-all; }
+  .pill { display:inline-block; padding:1px 8px; border-radius:999px; font-size:11px; font-weight:600; }
+  .ready,.acked { background:#dafbe1; color:#1a7f37; }
+  .cancelled,.quarantined,.orphan_partial,.dead_letter { background:#ffebe9; color:#cf222e; }
+  .superseded { background:#fff8c5; color:#9a6700; }
+  .awaiting_file,.leased { background:#ddf4ff; color:#0969da; }
+  button { border:1px solid #d0d7de; background:#f6f8fa; border-radius:6px; padding:6px 12px; cursor:pointer; }
+  button.primary { background:#0969da; color:#fff; border-color:#0969da; }
+  .switch { display:flex; align-items:center; gap:6px; margin:4px 0; font-size:13px; }
+  .switch input { width:auto; }
+  input { padding:5px; border:1px solid #d0d7de; border-radius:6px; width:90px; }
+  .muted { color:#6e7781; font-size:12px; }
+  pre { background:#0d1117; color:#7ee787; padding:8px; border-radius:6px; font-size:11px; max-height:240px; overflow:auto; }
+</style>
+</head>
+<body>
+<header>
+  <h2 style="margin:0;font-size:16px">🧲 浏览器采集器 / 入库队列</h2>
+  <a href="http://127.0.0.1:8080/ui">← 返回门户</a>
+</header>
+<main>
+  <div class="card">
+    <b>队列控制</b>
+    <div class="switch" style="margin-top:8px"><input type="checkbox" id="drop-ack">
+      <label style="margin:0">丢弃 worker 的 ACK（模拟入库成功但无回执；租约过期后重投，worker 幂等去重）</label></div>
+    <div class="switch"><input type="number" id="spool-ms" min="0"> <label>spool 写入延迟 ms（制造通知先于文件写完）</label></div>
+    <div class="switch"><input type="number" id="lease-s" min="5"> <label>租约秒数</label></div>
+    <button class="primary" onclick="save()">应用</button>
+    <button onclick="reconcile()">立即对账</button>
+    <span id="recon" class="muted"></span>
+  </div>
+  <div class="card">
+    <b>Envelope（以 download_id 去重，文件名不参与配对）</b>
+    <table style="margin-top:8px">
+      <thead><tr><th>download_id / task_id</th><th>状态</th><th>manifest 三要素</th>
+      <th>文件路径</th><th>哈希 / 大小</th><th>尝试 / 错误</th></tr></thead>
+      <tbody id="env-rows"></tbody>
+    </table>
+  </div>
+  <div class="card">
+    <b>原始浏览器事件（通知通道，仅登记不配对）</b>
+    <pre id="events"></pre>
+  </div>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+async function api(method, url, body) {
+  const r = await fetch(url, { method, headers: body ? {'Content-Type':'application/json'}:{},
+    body: body ? JSON.stringify(body) : undefined });
+  return r.json();
+}
+const pill = (s) => `<span class="pill ${s}">${s}</span>`;
+async function load() {
+  const [ctl, data] = await Promise.all([api('GET','/api/control'), api('GET','/api/envelopes')]);
+  $('drop-ack').checked = !!ctl.drop_ack;
+  $('spool-ms').value = ctl.slow_spool_ms;
+  $('lease-s').value = ctl.lease_seconds;
+  const rows = data.envelopes.map((e) => `<tr>
+    <td><code>${e.download_id}</code><br><span class="muted">task:</span> <code>${e.task_id}</code></td>
+    <td>${pill(e.status)}${e.leased_at?`<br><span class="muted">leased ${new Date(e.leased_at*1000).toLocaleTimeString()}</span>`:''}</td>
+    <td><b>filter:</b> <code>${JSON.stringify(e.manifest.filter)}</code><br>
+        <b>token:</b> <code>${(e.manifest.token||'').slice(0,12)}…</code><br>
+        <b>file:</b> ${e.manifest.declared_filename||'—'}</td>
+    <td>${e.incoming_path?`<code>${e.incoming_path}</code>`:''}${e.spool_path?`<br><code>${e.spool_path}</code>`:''}</td>
+    <td><code>${(e.sha256||'').slice(0,16)}…</code><br>${e.size_bytes||0} B</td>
+    <td>${e.attempts} 次${e.last_error?`<br><span class="muted">${e.last_error}</span>`:''}</td></tr>`).join('');
+  $('env-rows').innerHTML = rows || '<tr><td colspan="6" class="muted">暂无 envelope</td></tr>';
+  const ev = {};
+  for (const e of data.envelopes) {
+    const detail = await api('GET', `/api/envelopes/${e.download_id}`).catch(()=>null);
+    if (detail && detail.events) ev[e.download_id] = detail.events;
+  }
+  $('events').textContent = JSON.stringify(ev, null, 2);
+}
+async function save() {
+  await api('PUT','/api/control', { drop_ack: $('drop-ack').checked?1:0,
+    slow_spool_ms: Number($('spool-ms').value)||0, lease_seconds: Number($('lease-s').value)||30 });
+  alert('已保存');
+}
+async function reconcile() {
+  const r = await api('POST','/api/reconcile', {});
+  $('recon').textContent = '对账结果: ' + JSON.stringify(r);
+  load();
+}
+load();
+setInterval(load, 3000);
+</script>
+</body>
+</html>

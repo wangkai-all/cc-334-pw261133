@@ -1,0 +1,303 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>虚构报表门户 · 下载关联演示</title>
+<style>
+  :root { --bd:#d0d7de; --bg:#f6f8fa; --blue:#0969da; --red:#cf222e; --green:#1a7f37; --amber:#9a6700; }
+  * { box-sizing: border-box; }
+  body { font: 14px/1.55 -apple-system, "Segoe UI", system-ui, sans-serif; margin: 0; color: #1f2328; }
+  header { background: #24292f; color: #fff; padding: 12px 20px; display:flex; align-items:center; gap:16px; }
+  header h1 { font-size: 17px; margin: 0; }
+  header a { color: #79c0ff; text-decoration: none; font-size: 13px; }
+  main { display: grid; grid-template-columns: 380px 1fr; gap: 16px; padding: 16px 20px; }
+  .card { border: 1px solid var(--bd); border-radius: 8px; padding: 14px; background: #fff; margin-bottom: 16px; }
+  .card h2 { font-size: 14px; margin: 0 0 10px; }
+  label { display:block; font-size: 12px; color: #57606a; margin: 8px 0 3px; }
+  input, select { width: 100%; padding: 6px 8px; border: 1px solid var(--bd); border-radius: 6px; font-size: 13px; }
+  button { border: 1px solid var(--bd); background: var(--bg); border-radius: 6px; padding: 6px 12px; cursor: pointer; font-size: 13px; margin: 4px 4px 0 0; }
+  button.primary { background: var(--blue); color: #fff; border-color: var(--blue); }
+  button.danger { color: var(--red); border-color: var(--red); }
+  table { border-collapse: collapse; width: 100%; font-size: 12.5px; }
+  th, td { border: 1px solid var(--bd); padding: 6px 8px; text-align: left; vertical-align: top; }
+  th { background: var(--bg); position: sticky; top: 0; }
+  .pill { display:inline-block; padding: 1px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; }
+  .ready,.acked,.ingested { background:#dafbe1; color: var(--green); }
+  .cancelled,.quarantined,.orphan_partial,.dead_letter { background:#ffebe9; color: var(--red); }
+  .superseded { background:#fff8c5; color: var(--amber); }
+  .created,.awaiting_file,.leased,.processing,.retry_pending { background:#ddf4ff; color: var(--blue); }
+  code { font-size: 11px; word-break: break-all; }
+  .mono { font-family: ui-monospace, monospace; font-size: 11px; }
+  .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+  .switch { display:flex; align-items:center; gap:6px; margin:4px 0; font-size:12.5px; }
+  .switch input { width:auto; }
+  .log { background:#0d1117; color:#7ee787; font:11px ui-monospace,monospace; padding:8px; border-radius:6px; max-height:180px; overflow:auto; white-space:pre-wrap; }
+  .muted { color:#6e7781; font-size:12px; }
+  .toast { position:fixed; right:20px; bottom:20px; background:#24292f; color:#fff; padding:10px 16px; border-radius:8px; font-size:13px; opacity:0; transition:opacity .2s; max-width:420px; }
+  .toast.show { opacity:1; }
+</style>
+</head>
+<body>
+<header>
+  <h1>📊 虚构报表门户</h1>
+  <a href="/ui">门户</a>
+  <a href="http://127.0.0.1:8090/ui" target="_blank">采集器/队列 →</a>
+  <span class="muted" style="color:#8b949e">关联只认 task_id + token + 内容哈希，不认文件名</span>
+</header>
+<main>
+  <section>
+    <div class="card">
+      <h2>1. 发起生成任务（同名文件可重复）</h2>
+      <div class="grid2">
+        <div><label>报表</label>
+          <select id="f-report"><option>sales</option><option>inventory</option><option>traffic</option></select>
+        </div>
+        <div><label>区域</label>
+          <select id="f-region"><option>all</option><option>north</option><option>south</option><option>east</option><option>west</option></select>
+        </div>
+      </div>
+      <label>期间</label><input id="f-period" value="2026-11">
+      <label>备注（参与筛选条件哈希）</label><input id="f-detail" value="">
+      <button class="primary" onclick="createTask()">生成报表</button>
+      <button onclick="createTask(3)">连续生成 ×3（同名并发）</button>
+    </div>
+
+    <div class="card">
+      <h2>2. 虚拟浏览器（真实下载文件到磁盘）</h2>
+      <div class="switch"><input type="checkbox" id="vb-auto"><label style="margin:0">自动跟随 SSE ready 通知下载（可体验乱序/重复通知）</label></div>
+      <button onclick="vbAction('download')">对选中任务执行下载</button>
+      <button class="danger" onclick="vbAction('crash-before-post')">下载后、上传前"浏览器退出"</button>
+      <button onclick="vbAction('restart-recover')">重启浏览器并扫描恢复</button>
+      <button onclick="vbReset()">清空浏览器下载目录</button>
+      <div id="vb-status" class="mono" style="margin-top:8px"></div>
+    </div>
+
+    <div class="card">
+      <h2>3. 故障注入开关</h2>
+      <div class="switch"><input type="checkbox" id="c-sse-drop"><label style="margin:0">丢弃 ready 通知（文件仍可下载）</label></div>
+      <label>SSE 延迟 (ms)</label><input id="c-sse-delay" type="number" value="0">
+      <label>SSE 重复次数</label><input id="c-sse-dup" type="number" value="0">
+      <label>下载分块延迟 (ms，制造通知先于写完)</label><input id="c-chunk" type="number" value="0">
+      <div class="switch"><input type="checkbox" id="c-tamper"><label style="margin:0">下载内容被替换（记录哈希不更新 → 内容核对失败）</label></div>
+      <label>在途迟到文件演练（先武装→对旧任务点下载→取消并重发→放行）</label>
+      <button onclick="holdArm()">武装下载阻塞门</button>
+      <button onclick="holdRelease()">放行阻塞中的下载</button>
+      <div class="switch"><input type="checkbox" id="c-drop-ack"><label style="margin:0">采集器丢弃 ACK（入库成功无回执）</label></div>
+      <label>采集器 spool 延迟 (ms)</label><input id="c-spool" type="number" value="0">
+      <label>队列租约 (s)</label><input id="c-lease" type="number" value="30">
+      <button class="primary" onclick="saveControl()">应用开关</button>
+    </div>
+    <div class="card">
+      <h2>实时事件日志（SSE）</h2>
+      <div id="sse-log" class="log"></div>
+    </div>
+  </section>
+
+  <section>
+    <div class="card">
+      <h2>任务与文件全链路溯源
+        <button style="float:right" onclick="refreshAll()">刷新</button>
+      </h2>
+      <table>
+        <thead><tr>
+          <th>任务 / download_id</th><th>来源筛选条件</th><th>文件名（可重复）</th>
+          <th>任务状态</th><th>采集处理状态</th><th>入库状态 / 恢复去向</th><th>操作</th>
+        </tr></thead>
+        <tbody id="rows"></tbody>
+      </table>
+      <p class="muted">隔离与死信文件保留在 runtime/worker/quarantine、runtime/collector/spool，页面给出具体路径。</p>
+    </div>
+  </section>
+</main>
+<div id="toast" class="toast"></div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let TASKS = [], ENVS = [], LEDGER = [], selected = null;
+
+function toast(msg, bad) {
+  const t = $('toast');
+  t.textContent = msg;
+  t.style.background = bad ? '#cf222e' : '#24292f';
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 3500);
+}
+async function api(method, url, body) {
+  const r = await fetch(url, { method, headers: body ? { 'Content-Type': 'application/json' } : {},
+    body: body ? JSON.stringify(body) : undefined });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw Object.assign(new Error(j.error || url), { detail: j });
+  return j;
+}
+function pill(s) { return `<span class="pill ${s}">${s}</span>`; }
+function short(x, n=10) { return x ? `<code>${String(x).slice(0,n)}…</code>` : '<span class="muted">—</span>'; }
+
+async function createTask(times) {
+  const n = times || 1;
+  for (let i = 0; i < n; i++) {
+    await api('POST', '/api/tasks', { filter: {
+      report: $('f-report').value, region: $('f-region').value,
+      period: $('f-period').value, detail: $('f-detail').value } });
+  }
+  toast(n > 1 ? `已创建 ${n} 个同名任务` : '任务已创建');
+  refreshAll();
+}
+
+async function saveControl() {
+  const portal = {
+    sse_drop_ready: $('c-sse-drop').checked ? 1 : 0,
+    sse_delay_ms: Number($('c-sse-delay').value) || 0,
+    sse_duplicate: Number($('c-sse-dup').value) || 0,
+    download_chunk_delay_ms: Number($('c-chunk').value) || 0,
+    tamper_download: $('c-tamper').checked ? 1 : 0,
+  };  const collector = {
+    drop_ack: $('c-drop-ack').checked ? 1 : 0,
+    slow_spool_ms: Number($('c-spool').value) || 0,
+    lease_seconds: Number($('c-lease').value) || 30,
+  };
+  await api('PUT', '/api/control', portal);
+  await api('PUT', 'http://127.0.0.1:8090/api/control', collector);
+  toast('故障开关已保存');
+}
+
+async function loadControl() {
+  const p = await api('GET', '/api/control');
+  const c = await api('GET', 'http://127.0.0.1:8090/api/control');
+  $('c-sse-drop').checked = !!p.sse_drop_ready;
+  $('c-sse-delay').value = p.sse_delay_ms;
+  $('c-sse-dup').value = p.sse_duplicate;
+  $('c-chunk').value = p.download_chunk_delay_ms;
+  $('c-tamper').checked = !!p.tamper_download;
+  $('c-drop-ack').checked = !!c.drop_ack;
+  $('c-spool').value = c.slow_spool_ms;
+  $('c-lease').value = c.lease_seconds;
+}
+
+async function holdArm() {
+  await api('PUT', '/api/control', { download_hold: 1 });
+  await api('POST', '/api/hold/arm', {});
+  toast('阻塞门已武装：现在对任意 ready 任务发起的下载都会挂起');
+}
+async function holdRelease() {
+  await api('POST', '/api/hold/release', {});
+  await api('PUT', '/api/control', { download_hold: 0 });
+  toast('已放行挂起的下载，迟到文件将进入核对流程');
+  refreshAll();
+}
+
+async function cancelAndRegenerate(taskId) {
+  const r = await api('POST', `/api/tasks/${taskId}/regenerate`, {});
+  toast(`旧任务 ${r.cancelled.status}，新任务 ${r.new_task.task_id.slice(0,8)} 已立即创建`);
+  refreshAll();
+}
+async function cancelTask(taskId) {
+  await api('POST', `/api/tasks/${taskId}/cancel`, { reason: 'manual_from_ui' });
+  refreshAll();
+}
+
+async function vbAction(kind) {
+  if (!selected) return toast('请先在表格中点选一个任务', true);
+  const t = TASKS.find((x) => x.task_id === selected);
+  try {
+    if (kind === 'restart-recover') {
+      const r = await api('POST', 'http://127.0.0.1:8095/restart-recover', {});
+      toast(`恢复上传 ${r.recovered.length} 份`);
+    } else {
+      const url = kind === 'download' ? '/download' : '/crash-before-post';
+      const r = await api('POST', `http://127.0.0.1:8095${url}`,
+        { task: { task_id: t.task_id, token: t.token, filter: t.filter, filename: t.filename } });
+      toast(kind === 'download' ? `下载完成 download_id=${r.download_id.slice(0,8)}`
+        : `已模拟浏览器退出，文件留在磁盘（download_id=${r.download_id.slice(0,8)}）`);
+    }
+  } catch (e) { toast(String(e), true); }
+  setTimeout(refreshAll, 800);
+}
+async function vbReset() {
+  await api('POST', 'http://127.0.0.1:8095/reset', {});
+  toast('虚拟浏览器目录已清空');
+  refreshAll();
+}
+async function vbStatus() {
+  try {
+    const s = await api('GET', 'http://127.0.0.1:8095/status');
+    $('vb-status').innerHTML = `下载目录: ${s.download_dir}<br>在途/已存: ${s.running.length} 份` +
+      (s.auto ? '<br>🟢 SSE 自动模式' : '');
+  } catch { $('vb-status').textContent = '虚拟浏览器未启动 (node vbrowser/index.js)'; }
+}
+$('vb-auto').addEventListener('change', async (e) => {
+  toast('自动模式需以 --auto 重启虚拟浏览器进程', !e.target.checked);
+});
+
+function envForTask(taskId) { return ENVS.filter((e) => e.task_id === taskId); }
+function ledgerFor(did) { return LEDGER.find((l) => l.download_id === did); }
+
+function renderRows() {
+  const tb = $('rows');
+  tb.innerHTML = '';
+  for (const t of TASKS) {
+    const envs = envForTask(t.task_id);
+    if (envs.length === 0) {
+      tb.insertAdjacentHTML('beforeend', `<tr style="${selected===t.task_id?'background:#ddf4ff':''}"
+        onclick="selected='${t.task_id}';renderRows()">
+        <td><b>${t.task_id.slice(0,8)}…</b><br><span class="muted">尚无下载</span></td>
+        <td class="mono">${JSON.stringify(t.filter)}</td>
+        <td>${t.filename}</td><td>${pill(t.status)}</td>
+        <td class="muted">—</td><td class="muted">—</td>
+        <td><button onclick="event.stopPropagation();cancelTask('${t.task_id}')">取消</button>
+        <button onclick="event.stopPropagation();cancelAndRegenerate('${t.task_id}')">取消并重发</button></td></tr>`);
+      continue;
+    }
+    for (const e of envs) {
+      const lg = ledgerFor(e.download_id);
+      const dest = lg
+        ? (lg.status === 'ingested'
+            ? `✅ ingested<br><code>${lg.library_path}</code>`
+            : `⛔ ${lg.status}<br><code>${lg.quarantine_path || '—'}</code><br><span class="muted">${lg.reason || ''}</span>`)
+        : (e.status === 'dead_letter' ? `⛔ dead_letter<br><span class="muted">${e.last_error||''}</span>` : '⏳ 未入库');
+      tb.insertAdjacentHTML('beforeend', `<tr style="${selected===t.task_id?'background:#ddf4ff':''}"
+        onclick="selected='${t.task_id}';renderRows()">
+        <td><b>${t.task_id.slice(0,8)}…</b><br><span class="muted">dl:</span><br>${short(e.download_id,12)}</td>
+        <td class="mono">${JSON.stringify(t.filter)}<br><span class="muted">manifest:</span> ${JSON.stringify(e.manifest.filter)}</td>
+        <td>${t.filename}<br><span class="muted">${e.size_bytes||0} B</span></td>
+        <td>${pill(t.status)}${t.superseded_by?`<br><span class="muted">→ ${t.superseded_by.slice(0,8)}…</span>`:''}</td>
+        <td>${pill(e.status)}<br><span class="muted">尝试 ${e.attempts} 次</span>${e.last_error?`<br><span class="muted">${e.last_error}</span>`:''}</td>
+        <td>${dest}<br><span class="muted">sha:</span> ${short(e.sha256,12)}</td>
+        <td><button onclick="event.stopPropagation();cancelTask('${t.task_id}')">取消</button>
+        <button onclick="event.stopPropagation();cancelAndRegenerate('${t.task_id}')">取消并重发</button></td></tr>`);
+    }
+  }
+}
+
+async function refreshAll() {
+  const [tt, cc, ll] = await Promise.all([
+    api('GET', '/api/tasks'),
+    api('GET', 'http://127.0.0.1:8090/api/envelopes'),
+    api('GET', 'http://127.0.0.1:8091/ledger').catch(() => ({ ingests: [] })),
+  ]);
+  TASKS = tt.tasks; ENVS = cc.envelopes; LEDGER = ll.ingests || [];
+  renderRows();
+}
+
+function connectSSE() {
+  const es = new EventSource('/api/events/stream');
+  const log = (name, data) => {
+    const div = $('sse-log');
+    div.textContent = `[${new Date().toLocaleTimeString()}] ${name} ${(data.task_id||'').slice(0,8)}\n` + div.textContent;
+  };
+  for (const ev of ['task.created', 'task.ready', 'task.cancelled']) {
+    es.addEventListener(ev, (m) => { log(ev, JSON.parse(m.data)); refreshAll(); });
+  }
+}
+
+(async function init() {
+  await loadControl();
+  await refreshAll();
+  vbStatus();
+  setInterval(refreshAll, 3000);
+  setInterval(vbStatus, 5000);
+  connectSSE();
+  // Also drive the virtual browser auto flag check.
+})();
+</script>
+</body>
+</html>
